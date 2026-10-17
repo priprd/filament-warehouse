@@ -1,0 +1,36 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: minions-filaments-warehouse:v1.0.0
+    container_name: minions_warehouse_web
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://minion:bananapass123@db:5432/filaments_db
+      WAREHOUSE_CONFIG_FILE: /app/config.yaml
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  db:
+    image: postgres:16-alpine
+    container_name: minions_warehouse_db
+    environment:
+      POSTGRES_USER: minion
+      POSTGRES_PASSWORD: bananapass123
+      POSTGRES_DB: filaments_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minion -d filaments_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

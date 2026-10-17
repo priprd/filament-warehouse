@@ -1,0 +1,5 @@
+auth_enabled: true
+default_admin_username: minion_master
+default_admin_password: banana123
+default_admin_email: stuart@minions-warehouse.io
+oauth_providers: {}

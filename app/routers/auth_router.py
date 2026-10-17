@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
+from jose import JWTError, jwt
+from typing import Optional
 from urllib.parse import urlencode
 import secrets
 import requests
@@ -45,24 +47,6 @@ def login(login_in: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(
         (User.username == login_in.username_or_email) | (User.email == login_in.username_or_email)
     ).first()
-
-    # Self-healing fallback for default configured admin if database was initialized empty
-    admin_uname = settings.DEFAULT_ADMIN_USERNAME or "minion_master"
-    admin_email = settings.DEFAULT_ADMIN_EMAIL or "stuart@minions-warehouse.io"
-    admin_pass = settings.DEFAULT_ADMIN_PASSWORD or "banana123"
-
-    if not user and login_in.username_or_email in (admin_uname, admin_email, "minion_master", "stuart@minions-warehouse.io"):
-        if login_in.password == admin_pass:
-            user = User(
-                username=admin_uname,
-                email=admin_email,
-                hashed_password=get_password_hash(admin_pass),
-                avatar_url="https://api.dicebear.com/7.x/bottts/svg?seed=BobMinion",
-                role="admin"
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
 
     if not user or not user.hashed_password or not verify_password(login_in.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect username/email or password")
@@ -134,13 +118,15 @@ def oauth_authorize(provider: str):
     return RedirectResponse(f"{config['authorize_url']}?{urlencode(params)}")
 
 @router.get("/oauth/callback")
-def oauth_callback(provider: str, code: str, state: str, db: Session = Depends(get_db)):
+def oauth_callback(code: str, state: str, provider: Optional[str] = None, db: Session = Depends(get_db)):
     try:
-        claims = __import__("jose").jwt.decode(state, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid OAuth state")
-    if claims.get("provider") != provider:
+        claims = jwt.decode(state, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError as exc:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state") from exc
+    state_provider = claims.get("provider")
+    if not isinstance(state_provider, str) or (provider and state_provider != provider):
         raise HTTPException(status_code=400, detail="OAuth provider mismatch")
+    provider = state_provider
     config = settings.OAUTH_PROVIDERS.get(provider)
     if not config:
         raise HTTPException(status_code=404, detail="OAuth provider is not configured")

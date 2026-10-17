@@ -1,6 +1,6 @@
 # Minions Filaments Warehouse 🍌🧵
 
-> A modern, highly responsive 3D printing filament warehouse web application built in Python with **FastAPI**, **SQLAlchemy** (PostgreSQL/MySQL/SQLite), **Google Auth & Password Login**, **Historical Purchase Price Tracking**, **Web NFC Spool Weight Scanner**, **Minions Easter Eggs**, and **Versioned Docker Containerization**.
+> A 3D printing filament warehouse built with **FastAPI** and **SQLAlchemy**, with account-based access, price history, NFC spool weight scanning, and container/Kubernetes deployment support.
 
 ---
 
@@ -15,9 +15,9 @@
    - Preserves complete purchase history over time (price, currency, store name, quantity bought, notes).
 
 3. **Authentication**:
-   - **Google Sign-In** (OAuth2 / OpenID Connect).
+   - Google Sign-In (OAuth2 / OpenID Connect) when configured.
    - **Username & Password** authentication with bcrypt hashing & JWT tokens.
-   - Configured bootstrap admin, JWT sessions, user/admin roles, blocked accounts, and admin-only user management.
+   - Optional bootstrap admin, JWT sessions, user/admin roles, blocked accounts, and admin-only user management.
    - Multiple OpenID Connect providers can be configured through `OAUTH_PROVIDERS_YAML`.
 
 4. **Database Backends**:
@@ -27,13 +27,7 @@
    - Native browser **Web NFC API** (`NDEFReader`) on supported mobile devices.
    - **Interactive Desktop NFC Simulator** to simulate scanning tag UIDs and updating remaining spool weight.
 
-6. **Minions Theme & Easter Eggs 🍌**:
-   - Minion yellow (`#FFE135`) & blue aesthetic, glassmorphic cards, Google Fonts.
-   - Web Audio API voice synthesizer ("Bello!", "Banana!", "Poopaye!").
-   - Falling Banana 🍌 canvas particle animation overlay.
-   - Single-eye (Stuart) vs Two-eye (Bob) Minion goggle toggle.
-
-7. **Containerized & Versioned**:
+6. **Containerized & Versioned**:
    - Production `Dockerfile`, `docker-compose.yml`, `VERSION` (`v1.0.0`), and `build-container.sh` tag versioning script.
 
 ---
@@ -48,18 +42,19 @@ Open your browser at `http://localhost:8000`.
 
 ---
 
-## 🧪 Running Automated Tests
+## Running Automated Tests
 
-Run the test suite inside a disposable container:
+Install the listed dependencies and run the complete suite:
 ```bash
-podman compose run --rm -e TESTING=true -e DATABASE_URL=sqlite:// web pytest tests/test_api.py -v
+python3 -m pip install -r requirements.txt
+python3 -m pytest tests/ -q
 ```
 
 ---
 
 ## 🐳 Docker Container & Versioning
 
-### Build Versioned Container Image
+### Build a local container image
 Run the versioning build script:
 ```bash
 ./build-container.sh
@@ -68,12 +63,32 @@ This builds and tags Docker images as:
 - `minions-filaments-warehouse:v1.0.0`
 - `minions-filaments-warehouse:latest`
 
-### Run with Podman Compose / Docker Compose (FastAPI + PostgreSQL)
+### Run with Podman Compose / Docker Compose
 ```bash
 podman compose up -d
 # OR
 docker compose up -d
 ```
+
+### Free GitHub Container Registry publishing
+
+The GitHub Actions workflow runs the full test suite and builds the `Containerfile` on pull requests. Pushes to `main` and version tags (`v*`) publish `ghcr.io/<owner>/<repository>` using the built-in `GITHUB_TOKEN`; no paid registry or third-party credentials are needed. For a public project, make the published GHCR package public in its GitHub package settings so image storage and downloads stay on the public/free path. GitHub-hosted Actions minutes are subject to the repository/account's free quota.
+
+## Kubernetes
+
+Edit the image in `deploy/kubernetes.yaml` to your GHCR package, then configure a persistent JWT secret and initial admin password before applying:
+
+```bash
+kubectl create secret generic filaments-warehouse-secrets \
+  --from-literal=secret-key="$(openssl rand -hex 32)" \
+  --from-literal=admin-username=admin \
+  --from-literal=admin-password='REPLACE_WITH_A_LONG_UNIQUE_PASSWORD' \
+  --from-literal=admin-email=admin@example.com
+kubectl apply -f deploy/kubernetes.yaml
+kubectl port-forward service/filaments-warehouse 8000:80
+```
+
+Replace `ghcr.io/owner/repository:latest` with the lowercase path to your GHCR image. The manifest provides a ConfigMap-mounted `config.yaml` and runs one replica with SQLite on a 1 GiB persistent volume claim. Keep one replica when using SQLite; use an external PostgreSQL/MySQL database via the `database-url` Secret key or `DATABASE_URL` environment variable if you need multiple replicas. Non-secret environment settings override the ConfigMap. Optional Secret keys `google-client-id`, `google-client-secret`, and `oauth-providers-yaml` configure OAuth. `/livez` checks that the app process is alive; `/readyz` also checks database connectivity. The app runs as a non-root user.
 
 ---
 
@@ -81,17 +96,21 @@ docker compose up -d
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | SQLAlchemy DB Connection String | `sqlite:///./filaments.db` |
-| `SECRET_KEY` | JWT Secret Key | `bello_minions_secret_key...` |
-| `DEFAULT_ADMIN_USERNAME` | Initial administrator username | `minion_master` |
-| `DEFAULT_ADMIN_PASSWORD` | Initial administrator password | `banana123` |
-| `DEFAULT_ADMIN_EMAIL` | Initial administrator email | `stuart@minions-warehouse.io` |
+| `WAREHOUSE_CONFIG_FILE` | YAML configuration file path | `config.yaml` |
+| `DATABASE_URL` | SQLAlchemy DB connection string (overrides DB fields in YAML) | `sqlite:///./filaments.db` |
+| `DB_TYPE`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Build the database URL when `DATABASE_URL` is unset | SQLite / local |
+| `FEATURE_AUTH_REQUIRED` | Require a valid user token for warehouse APIs | `true` |
+| `SECRET_KEY` | Stable JWT signing key; set it in production and store it as a Kubernetes Secret | generated per process if unset |
+| `DEFAULT_ADMIN_USERNAME` | Username for the initial administrator | `admin` |
+| `DEFAULT_ADMIN_PASSWORD` | Initial administrator password; no admin is bootstrapped when unset | unset |
+| `DEFAULT_ADMIN_EMAIL` | Initial administrator email | `admin@example.invalid` |
+| `PORT` | HTTP listen port | `8000` |
 | `GOOGLE_CLIENT_ID` | Google OAuth Client ID | `""` |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth Client secret | `""` |
 | `OAUTH_REDIRECT_URI` | OAuth callback URL | `http://localhost:8000/api/auth/oauth/callback` |
 | `OAUTH_PROVIDERS_YAML` | YAML map of provider settings | `{}` |
 
-Set `auth_enabled` to `false` in `config.yaml` for open access. In that mode the warehouse is usable without login; when it is `true`, the page requires login before showing inventory actions.
+Environment variables override values from `config.yaml`. Invalid YAML or invalid boolean settings stop startup with an explicit error. `config.yaml` does not contain a usable default admin password: set `DEFAULT_ADMIN_PASSWORD` (or `default_admin_password` in a private config file) to create the initial admin during startup. When auth is enabled and no bootstrap admin is configured, users can register and sign in but no administrator account is created. Never disable auth on an internet-facing deployment.
 
 Example provider configuration:
 ```yaml

@@ -38,13 +38,12 @@ COPY --from=builder /install /usr/local
 COPY . /app
 
 # Security: Create non-root unprivileged container user
-RUN useradd -m minionuser && chown -R minionuser:minionuser /app
+RUN useradd --uid 10001 -m minionuser && chown -R minionuser:minionuser /app
 USER minionuser
 
 EXPOSE 8000
 
-ENV DATABASE_URL="sqlite:///./filaments.db" \
-    PORT=8000 \
+ENV PORT=8000 \
     PYTHONUNBUFFERED=1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

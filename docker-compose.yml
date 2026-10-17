@@ -8,8 +8,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+psycopg2://minion:bananapass123@db:5432/filaments_db
+      DATABASE_URL: "${DATABASE_URL:-postgresql+psycopg2://minion:${POSTGRES_PASSWORD:-minion-local-dev-password}@db:5432/filaments_db}"
       WAREHOUSE_CONFIG_FILE: /app/config.yaml
+      SECRET_KEY: ${SECRET_KEY:-}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
     depends_on:
       db:
         condition: service_healthy
@@ -20,7 +24,7 @@ services:
     container_name: minions_warehouse_db
     environment:
       POSTGRES_USER: minion
-      POSTGRES_PASSWORD: bananapass123
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-minion-local-dev-password}
       POSTGRES_DB: filaments_db
     ports:
       - "5432:5432"

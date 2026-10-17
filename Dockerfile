@@ -28,12 +28,11 @@ COPY --from=builder /install /usr/local
 COPY . /app
 
 # Create non-root user
-RUN useradd -m minionuser && chown -R minionuser:minionuser /app
+RUN useradd --uid 10001 -m minionuser && chown -R minionuser:minionuser /app
 USER minionuser
 
 EXPOSE 8000
 
-ENV DATABASE_URL="sqlite:///./filaments.db"
 ENV PORT=8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

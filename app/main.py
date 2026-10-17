@@ -1,14 +1,20 @@
-from fastapi import FastAPI, Request
+import logging
+import os
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-import os
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.database import engine, Base, SessionLocal, ensure_auth_columns
 from app.models import Filament, PriceHistory, User
 from app.auth import get_password_hash
 from app.routers import filament_router, price_router, nfc_router, auth_router
+
+logger = logging.getLogger(__name__)
 
 # Initialize tables
 Base.metadata.create_all(bind=engine)
@@ -56,8 +62,10 @@ def seed_default_data():
 
     db = SessionLocal()
     try:
-        default_admin = db.query(User).filter(User.username == settings.DEFAULT_ADMIN_USERNAME).first()
-        if not default_admin:
+        default_admin = None
+        if settings.DEFAULT_ADMIN_PASSWORD:
+            default_admin = db.query(User).filter(User.username == settings.DEFAULT_ADMIN_USERNAME).first()
+        if settings.DEFAULT_ADMIN_PASSWORD and not default_admin:
             db.add(User(
                 username=settings.DEFAULT_ADMIN_USERNAME,
                 email=settings.DEFAULT_ADMIN_EMAIL,
@@ -66,7 +74,8 @@ def seed_default_data():
                 role="admin",
             ))
             db.commit()
-        if db.query(Filament).count() == 0:
+            default_admin = db.query(User).filter(User.username == settings.DEFAULT_ADMIN_USERNAME).first()
+        if default_admin and db.query(Filament).filter(Filament.user_id == default_admin.id).count() == 0:
             samples = [
                 {
                     "name": "Bambu Lab High Speed PLA",
@@ -132,7 +141,7 @@ def seed_default_data():
 
             for s in samples:
                 fil = Filament(
-                    user_id=1,
+                    user_id=default_admin.id,
                     name=s["name"],
                     material_type=s["material_type"],
                     color_name=s["color_name"],
@@ -170,6 +179,23 @@ def seed_default_data():
     finally:
         db.close()
 
+
+@app.get("/livez", include_in_schema=False)
+def liveness():
+    return {"status": "ok"}
+
+
+@app.get("/readyz", include_in_schema=False)
+def readiness():
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        logger.exception("Readiness check failed: database is unavailable")
+        raise HTTPException(status_code=503, detail="Database is unavailable") from exc
+    return {"status": "ok"}
+
+
 @app.get("/")
 def read_root(request: Request):
     return templates.TemplateResponse(
@@ -180,4 +206,4 @@ def read_root(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=True)

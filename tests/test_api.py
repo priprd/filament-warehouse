@@ -35,8 +35,11 @@ _db_module.SessionLocal = TestingSession
 # ── Now it is safe to import the FastAPI app ──────────────────────────────────
 import pytest
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import app, seed_default_data
 from app.database import Base, get_db
+from app.auth import create_access_token
+from app.config import settings
+from app.routers import auth_router
 
 
 # ── Dependency override: all API requests use TestingSession ──────────────────
@@ -118,6 +121,17 @@ def create_sample_filament(client, headers, *, nfc_uid="NFC-TEST-001", name="Tes
 # ═══════════════════════════════════════════════════════════════════════════════
 class TestUnauthenticatedAccess:
     """Verify that unauthenticated users are strictly blocked from all warehouse operations."""
+
+    def test_health_probes_are_available_without_authentication(self, client):
+        assert client.get("/livez").json() == {"status": "ok"}
+        assert client.get("/readyz").json() == {"status": "ok"}
+
+    def test_insecure_legacy_admin_credentials_are_not_accepted(self, client):
+        response = client.post("/api/auth/login", json={
+            "username_or_email": "minion_master",
+            "password": "banana123",
+        })
+        assert response.status_code == 401
 
     def test_unlogged_cannot_get_filaments_list(self, client):
         """Unlogged user cannot see filament stock list."""
@@ -348,6 +362,28 @@ class TestAuthenticatedWarehouse:
 # 3. AUTHENTICATION (REGISTER / LOGIN) UNIT TESTS
 # ═══════════════════════════════════════════════════════════════════════════════
 class TestAuthFlow:
+    def test_google_login_reports_when_provider_is_not_configured(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "")
+
+        response = client.post("/api/auth/google", json={"credential": "unused"})
+
+        assert response.status_code == 503
+
+    def test_configured_admin_bootstraps_and_can_login(self, client, monkeypatch):
+        monkeypatch.delenv("TESTING", raising=False)
+        monkeypatch.setattr(settings, "DEFAULT_ADMIN_USERNAME", "configured_admin")
+        monkeypatch.setattr(settings, "DEFAULT_ADMIN_PASSWORD", "a-long-test-password")
+        monkeypatch.setattr(settings, "DEFAULT_ADMIN_EMAIL", "configured-admin@example.com")
+
+        seed_default_data()
+        response = client.post("/api/auth/login", json={
+            "username_or_email": "configured_admin",
+            "password": "a-long-test-password",
+        })
+
+        assert response.status_code == 200
+        assert response.json()["user"]["role"] == "admin"
+
     def test_register_and_login_flow(self, client):
         reg = client.post("/api/auth/register", json={
             "username": "minion_master_test",
@@ -392,3 +428,50 @@ class TestAuthFlow:
         })
         assert res.status_code == 400
         assert "Username" in res.json()["detail"]
+
+    def test_oauth_callback_uses_signed_state_provider(self, client, monkeypatch):
+        class FakeResponse:
+            def __init__(self, body):
+                self.body = body
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.body
+
+        monkeypatch.setattr(settings, "OAUTH_PROVIDERS_YAML", {
+            "example": {
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+                "token_url": "https://identity.example/token",
+                "userinfo_url": "https://identity.example/userinfo",
+            }
+        })
+        monkeypatch.setattr(
+            auth_router.requests,
+            "post",
+            lambda *args, **kwargs: FakeResponse({"access_token": "provider-token"}),
+        )
+        monkeypatch.setattr(
+            auth_router.requests,
+            "get",
+            lambda *args, **kwargs: FakeResponse({
+                "email": "oauth@example.com",
+                "sub": "provider-user-id",
+                "name": "OAuth User",
+            }),
+        )
+
+        response = client.get("/api/auth/oauth/callback", params={
+            "code": "authorization-code",
+            "state": create_access_token({"provider": "example"}),
+        })
+
+        assert response.status_code == 200
+        assert response.json()["user"]["username"] == "oauth_user"
+        profile = client.get("/api/auth/me", headers={
+            "Authorization": f"Bearer {response.json()['access_token']}",
+        })
+        assert profile.status_code == 200
+        assert profile.json()["email"] == "oauth@example.com"

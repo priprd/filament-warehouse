@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filaments-warehouse-config
+data:
+  config.yaml: |
+    auth_enabled: true
+    database_url: sqlite:////data/filaments.db
+    default_admin_username: admin
+    default_admin_email: admin@example.invalid
+    oauth_providers: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: filaments-warehouse-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: filaments-warehouse
+  labels:
+    app.kubernetes.io/name: filaments-warehouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: filaments-warehouse
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: filaments-warehouse
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: app
+          image: ghcr.io/owner/repository:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: PORT
+              value: "8000"
+            - name: WAREHOUSE_CONFIG_FILE
+              value: /etc/warehouse/config.yaml
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: database-url
+                  optional: true
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: secret-key
+                  optional: true
+            - name: DEFAULT_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: admin-username
+                  optional: true
+            - name: DEFAULT_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: admin-password
+                  optional: true
+            - name: DEFAULT_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: admin-email
+                  optional: true
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: google-client-id
+                  optional: true
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: google-client-secret
+                  optional: true
+            - name: OAUTH_PROVIDERS_YAML
+              valueFrom:
+                secretKeyRef:
+                  name: filaments-warehouse-secrets
+                  key: oauth-providers-yaml
+                  optional: true
+          volumeMounts:
+            - name: application-data
+              mountPath: /data
+            - name: application-config
+              mountPath: /etc/warehouse
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: application-data
+          persistentVolumeClaim:
+            claimName: filaments-warehouse-data
+        - name: application-config
+          configMap:
+            name: filaments-warehouse-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: filaments-warehouse
+spec:
+  selector:
+    app.kubernetes.io/name: filaments-warehouse
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP

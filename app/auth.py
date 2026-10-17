@@ -5,6 +5,7 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from google.auth.exceptions import GoogleAuthError
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -83,9 +84,14 @@ def verify_google_token(token: str) -> dict:
     try:
         if not settings.GOOGLE_CLIENT_ID:
             raise HTTPException(status_code=503, detail="Google OAuth is not configured")
-        return id_token.verify_oauth2_token(token, google_requests.Request(), settings.GOOGLE_CLIENT_ID)
-    except Exception as e:
+        payload = id_token.verify_oauth2_token(token, google_requests.Request(), settings.GOOGLE_CLIENT_ID)
+    except HTTPException:
+        raise
+    except (GoogleAuthError, ValueError) as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid Google Auth token: {str(e)}"
-        )
+        ) from e
+    if not payload.get("sub") or not payload.get("email") or payload.get("email_verified") is not True:
+        raise HTTPException(status_code=400, detail="Google account must provide a verified email")
+    return payload
